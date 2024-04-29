@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num-complex = "0.4.5"
 num-traits = "0.2.18"
+rustfft = "6.2.0"
