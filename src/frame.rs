@@ -2,8 +2,9 @@ use crate::{variables::Q, windows};
 use num_traits::{Float, FloatConst};
 
 pub struct Framing<T> {
-    analysis_window: Vec<T>,
+    window: Vec<T>,
     q: Q,
+    frame_buffer: Vec<T>,
 }
 
 impl<T> Framing<T>
@@ -13,20 +14,21 @@ where
     pub fn with_window(q: Q, window: impl Fn(T) -> T) -> Self {
         let window = windows::window(q, window);
         Self {
-            analysis_window: window,
+            window,
+            frame_buffer: vec![T::zero(); q.window_size()],
             q,
         }
     }
 
-    pub fn process<F>(&self, signal: &mut [T], mut closure: F)
+    pub fn process<F>(&mut self, signal: &mut [T], mut work_with_frame: F)
     where
         F: FnMut(&mut [T]),
     {
-        let mut scratch = vec![T::zero(); signal.len()];
-        let mut frame: Vec<T> = vec![T::zero(); self.q.window_size()];
         let half: i32 = (self.q.window_size() / 2) as i32;
         let mut center: i32 = 0;
-        let mut scales: Vec<T> = vec![T::zero(); signal.len()];
+
+        let mut scratch = vec![T::zero(); signal.len()];
+        let mut scales = vec![T::zero(); signal.len()];
 
         loop {
             if center > signal.len() as i32 {
@@ -34,25 +36,27 @@ where
             }
 
             let indice = ((center - half)..(center + half)).enumerate();
+            assert!(indice.len() == self.frame_buffer.len());
 
             indice.clone().for_each(|(frame_index, signal_index)| {
                 let is_in_range = 0 <= signal_index && signal_index < signal.len() as i32;
-                frame[frame_index] = if !is_in_range {
+                self.frame_buffer[frame_index] = if !is_in_range {
                     T::zero()
                 } else {
-                    let signal_index: usize = signal_index as usize;
-                    signal[signal_index] * self.analysis_window[frame_index]
+                    let signal_index = signal_index as usize;
+                    signal[signal_index] * self.window[frame_index]
                 };
             });
 
-            closure(frame.as_mut_slice());
+            work_with_frame(self.frame_buffer.as_mut_slice());
 
             indice.for_each(|(frame_index, signal_index)| {
                 let is_in_range = 0 <= signal_index && signal_index < signal.len() as i32;
                 if is_in_range {
-                    let signal_index: usize = signal_index as usize;
-                    let w = self.analysis_window[frame_index];
-                    scratch[signal_index] = scratch[signal_index] + frame[frame_index] * w;
+                    let signal_index = signal_index as usize;
+                    let w = self.window[frame_index];
+                    scratch[signal_index] =
+                        scratch[signal_index] + self.frame_buffer[frame_index] * w;
                     scales[signal_index] = scales[signal_index] + w * w;
                 }
             });
@@ -60,13 +64,12 @@ where
             center += self.q.frame_shift() as i32;
         }
 
-        signal.clone_from_slice(&scratch);
-
-        for (x, s) in signal.iter_mut().zip(scales) {
-            if s > T::zero() {
-                *x = *x / s
-            }
-        }
+        signal
+            .iter_mut()
+            .zip(&scratch)
+            .zip(&scales)
+            .filter(|(_, scale)| **scale > T::zero())
+            .for_each(|((y, x), scale)| *y = *x / *scale);
     }
 }
 
@@ -78,10 +81,7 @@ mod tests {
     #[test]
     fn framing() {
         let q = Q::new(2, 2);
-        let framing = Framing {
-            analysis_window: vec![1.; q.window_size()],
-            q,
-        };
+        let mut framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = (0..4).map(|x| x as f32).collect();
         let mut progress: Vec<Vec<f32>> = vec![];
         framing.process(&mut data, |v| progress.push(v.to_vec()));
@@ -96,10 +96,7 @@ mod tests {
     #[test]
     fn works_with_signal_too_few() {
         let q = Q::new(2, 2);
-        let framing = Framing {
-            analysis_window: vec![1.; q.window_size()],
-            q,
-        };
+        let mut framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = vec![1337.];
         let mut progress: Vec<Vec<f32>> = vec![];
         framing.process(&mut data, |v| progress.push(v.to_vec()));
@@ -110,7 +107,7 @@ mod tests {
 
     #[test]
     fn reconstruction() {
-        let framing = Framing::with_window(Q::new(5, 4), windows::hann());
+        let mut framing = Framing::with_window(Q::new(5, 4), windows::hann());
         let mut in_data: Vec<f32> = (0..1024).map(|x| x as f32).collect();
         let out_data = in_data.clone();
         framing.process(&mut in_data, |_| {});

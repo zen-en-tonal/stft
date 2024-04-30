@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub struct Stft<T> {
     framing: Framing<T>,
     buffer: Vec<Complex<T>>,
+    scratch: Vec<Complex<T>>,
     forward: Arc<dyn Fft<T>>,
     backward: Arc<dyn Fft<T>>,
     q: Q,
@@ -23,6 +24,7 @@ where
             q,
             framing: Framing::with_window(q, window),
             buffer: vec![Complex::zero(); q.window_size()],
+            scratch: vec![Complex::zero(); q.window_size()],
             forward: planner.plan_fft_forward(q.window_size()),
             backward: planner.plan_fft_inverse(q.window_size()),
         }
@@ -48,33 +50,34 @@ where
         self.q.frame_shift()
     }
 
-    pub fn process<F>(&mut self, real: &mut [T], mut closure: F)
+    pub fn process<F>(&mut self, real: &mut [T], mut works_with_spec: F)
     where
         F: FnMut(&mut [Complex<T>]),
     {
         let window_size = T::from(self.window_size()).unwrap();
         let fft_size = self.fft_size();
 
-        self.framing.process(real, |buffer| {
-            self.buffer
-                .iter_mut()
-                .zip(buffer.iter())
-                .for_each(|(c, r)| {
-                    c.re = *r;
-                    c.im = T::zero();
-                });
+        self.framing.process(real, |frame| {
+            // fill self.buffer with real.
+            self.buffer.iter_mut().zip(frame.iter()).for_each(|(c, r)| {
+                c.re = *r;
+                c.im = T::zero();
+            });
 
-            self.forward.process(&mut self.buffer);
+            self.forward
+                .process_with_scratch(&mut self.buffer, &mut self.scratch);
 
-            closure(&mut self.buffer);
+            works_with_spec(&mut self.buffer[0..fft_size]);
 
+            // restore mirror image.
             for n in 1..(fft_size - 1) {
                 self.buffer[fft_size - 1 + n] = self.buffer[fft_size - 1 - n].conj();
             }
 
-            self.backward.process(&mut self.buffer);
+            self.backward
+                .process_with_scratch(&mut self.buffer, &mut self.scratch);
 
-            buffer
+            frame
                 .iter_mut()
                 .zip(self.buffer.iter())
                 .for_each(|(r, c)| *r = c.re / window_size);
@@ -88,13 +91,15 @@ mod tests {
 
     #[test]
     fn basic() {
-        let mut stft: Stft<f32> = Stft::with_hann(4, 2);
-        let mut in_data = vec![10.; 128];
-        let out_data = in_data.clone();
-        stft.process(&mut in_data, |_| {});
-        assert_eq!(
-            in_data.iter().map(|x| x.round()).collect::<Vec<_>>(),
-            out_data
-        );
+        let mut stft: Stft<f32> = Stft::with_hann(10, 256);
+        for _ in 0..10 {
+            let mut in_data = vec![10.; 4098];
+            let out_data = in_data.clone();
+            stft.process(&mut in_data, |_| {});
+            assert_eq!(
+                in_data.iter().map(|x| x.round()).collect::<Vec<_>>(),
+                out_data
+            );
+        }
     }
 }
