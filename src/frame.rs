@@ -1,10 +1,11 @@
 use crate::{variables::Q, windows};
 use num_traits::{Float, FloatConst};
 
+#[derive(Debug)]
 pub struct Framing<T> {
     window: Vec<T>,
     q: Q,
-    frame_buffer: Vec<T>,
+    buffer: Vec<T>,
 }
 
 impl<T> Framing<T>
@@ -15,7 +16,7 @@ where
         let window = windows::window(q, window);
         Self {
             window,
-            frame_buffer: vec![T::zero(); q.window_size()],
+            buffer: vec![T::zero(); q.window_size()],
             q,
         }
     }
@@ -24,52 +25,58 @@ where
     where
         F: FnMut(&mut [T]),
     {
-        let half: i32 = (self.q.window_size() / 2) as i32;
-        let mut center: i32 = 0;
+        let mut window_overraps = vec![T::zero(); signal.len()];
 
-        let mut scratch = vec![T::zero(); signal.len()];
-        let mut scales = vec![T::zero(); signal.len()];
+        let num_frames: usize = signal.len() / self.q.hop_size() + 1;
+        let mut m: usize = 0;
 
-        loop {
-            if center > signal.len() as i32 {
-                break;
+        while m < num_frames {
+            let pos = m * self.q.hop_size();
+
+            // TODO: self.buffer should be a ring buffer.
+            self.buffer.rotate_left(self.q.hop_size());
+            for n in 0..self.q.hop_size() {
+                let pos_hop = self.q.window_size() - self.q.hop_size() + n;
+                self.buffer[pos_hop] = *signal.get(pos + n).unwrap_or(&T::zero());
             }
 
-            let indice = ((center - half)..(center + half)).enumerate();
-            assert!(indice.len() == self.frame_buffer.len());
+            let mut windowed_frame: Vec<T> = self
+                .buffer
+                .iter()
+                .zip(self.window.iter())
+                .map(|(x, w)| *x * *w)
+                .collect();
 
-            indice.clone().for_each(|(frame_index, signal_index)| {
-                let is_in_range = 0 <= signal_index && signal_index < signal.len() as i32;
-                self.frame_buffer[frame_index] = if !is_in_range {
-                    T::zero()
-                } else {
-                    let signal_index = signal_index as usize;
-                    signal[signal_index] * self.window[frame_index]
+            work_with_frame(&mut windowed_frame);
+
+            for n in 0..self.q.window_size() {
+                let sig_index = match pos as i32 - self.q.overrap_size() as i32 + n as i32 {
+                    i if i < 0 => continue,
+                    i => i as usize,
                 };
-            });
-
-            work_with_frame(self.frame_buffer.as_mut_slice());
-
-            indice.for_each(|(frame_index, signal_index)| {
-                let is_in_range = 0 <= signal_index && signal_index < signal.len() as i32;
-                if is_in_range {
-                    let signal_index = signal_index as usize;
-                    let w = self.window[frame_index];
-                    scratch[signal_index] =
-                        scratch[signal_index] + self.frame_buffer[frame_index] * w;
-                    scales[signal_index] = scales[signal_index] + w * w;
+                let w = self.window[n];
+                let x = windowed_frame[n] * w;
+                match signal.get_mut(sig_index) {
+                    Some(y) if n < self.q.overrap_size() => {
+                        *y = *y + x;
+                        window_overraps[sig_index] = window_overraps[sig_index] + w * w;
+                    }
+                    Some(y) => {
+                        *y = x;
+                        window_overraps[sig_index] = window_overraps[sig_index] + w * w;
+                    }
+                    _ => continue,
                 }
-            });
+            }
 
-            center += self.q.frame_shift() as i32;
+            m += 1;
         }
 
         signal
             .iter_mut()
-            .zip(&scratch)
-            .zip(&scales)
+            .zip(&window_overraps)
             .filter(|(_, scale)| **scale > T::zero())
-            .for_each(|((y, x), scale)| *y = *x / *scale);
+            .for_each(|(y, scale)| *y = *y / *scale);
     }
 }
 
@@ -80,7 +87,7 @@ mod tests {
 
     #[test]
     fn framing() {
-        let q = Q::new(2, 2);
+        let q = Q::new(2, 0.5);
         let mut framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = (0..4).map(|x| x as f32).collect();
         let mut progress: Vec<Vec<f32>> = vec![];
@@ -95,7 +102,7 @@ mod tests {
 
     #[test]
     fn works_with_signal_too_few() {
-        let q = Q::new(2, 2);
+        let q = Q::new(2, 0.5);
         let mut framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = vec![1337.];
         let mut progress: Vec<Vec<f32>> = vec![];
@@ -107,8 +114,8 @@ mod tests {
 
     #[test]
     fn reconstruction() {
-        let mut framing = Framing::with_window(Q::new(5, 4), windows::hann());
-        let mut in_data: Vec<f32> = (0..1024).map(|x| x as f32).collect();
+        let mut framing = Framing::with_window(Q::new(4, 0.75), windows::hann());
+        let mut in_data: Vec<f32> = (1..64).map(|x| x as f32).collect();
         let out_data = in_data.clone();
         framing.process(&mut in_data, |_| {});
         assert_eq!(

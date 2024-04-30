@@ -1,30 +1,35 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Q {
     window_size: usize,
-    frame_shift: usize,
+    hop_size: usize,
 }
 
 impl Q {
-    pub fn new(window_level: usize, frame_shift: usize) -> Self {
-        assert!(window_level > 0);
-        let window_size = 1 << window_level;
-        assert!(frame_shift < window_size);
+    pub fn new(window_order: usize, overrap_rate: f32) -> Self {
+        assert!(window_order > 0);
+        assert!(0. <= overrap_rate && overrap_rate < 1.);
+        let window_size = 1 << window_order;
+        let hop_size = window_size as f32 * (1. - overrap_rate);
         Self {
             window_size,
-            frame_shift,
+            hop_size: hop_size.floor() as usize,
         }
     }
 
     pub fn as_usize(&self) -> usize {
-        self.window_size / self.frame_shift
+        self.window_size / self.hop_size
     }
 
     pub fn window_size(&self) -> usize {
         self.window_size
     }
 
-    pub fn frame_shift(&self) -> usize {
-        self.frame_shift
+    pub fn hop_size(&self) -> usize {
+        self.hop_size
+    }
+
+    pub fn overrap_size(&self) -> usize {
+        self.window_size() - self.hop_size()
     }
 }
 

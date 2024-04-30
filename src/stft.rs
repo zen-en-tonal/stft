@@ -17,8 +17,7 @@ impl<T> Stft<T>
 where
     T: Float + FloatConst + FftNum,
 {
-    pub fn new(window_level: usize, slide_size: usize, window: impl Fn(T) -> T) -> Stft<T> {
-        let q = Q::new(window_level, slide_size);
+    pub fn new(q: Q, window: impl Fn(T) -> T) -> Stft<T> {
         let mut planner = FftPlanner::new();
         Stft {
             q,
@@ -30,12 +29,12 @@ where
         }
     }
 
-    pub fn with_hann(window_level: usize, slide_size: usize) -> Stft<T> {
-        Stft::new(window_level, slide_size, windows::hann())
+    pub fn with_hann(q: Q) -> Stft<T> {
+        Stft::new(q, windows::hann())
     }
 
-    pub fn with_hamming(window_level: usize, slide_size: usize) -> Stft<T> {
-        Stft::new(window_level, slide_size, windows::hamming())
+    pub fn with_hamming(q: Q) -> Stft<T> {
+        Stft::new(q, windows::hamming())
     }
 
     pub fn window_size(&self) -> usize {
@@ -47,7 +46,7 @@ where
     }
 
     pub fn shift_size(&self) -> usize {
-        self.q.frame_shift()
+        self.q.hop_size()
     }
 
     pub fn process<F>(&mut self, real: &mut [T], mut works_with_spec: F)
@@ -87,11 +86,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::Stft;
+    use crate::{Stft, Q};
 
     #[test]
     fn basic() {
-        let mut stft: Stft<f32> = Stft::with_hann(10, 256);
+        let mut stft: Stft<f32> = Stft::with_hann(Q::new(10, 0.75));
         for _ in 0..10 {
             let mut in_data = vec![10.; 4098];
             let out_data = in_data.clone();
