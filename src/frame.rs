@@ -49,24 +49,23 @@ where
 
             work_with_frame(&mut windowed_frame);
 
-            for n in 0..self.q.window_size() {
-                let sig_index = match pos as i32 - self.q.overrap_size() as i32 + n as i32 {
-                    i if i < 0 => continue,
-                    i => i as usize,
+            for iota in 0..self.q.window_size() {
+                let sig_index = pos as i32 - self.q.overrap_size() as i32 + iota as i32;
+
+                let has_signal = (0..signal.len() as i32).contains(&sig_index);
+                let y = if has_signal {
+                    // Sefety: The boundary is already checked.
+                    unsafe { signal.get_unchecked_mut(sig_index as usize) }
+                } else {
+                    continue;
                 };
-                let w = self.window[n];
-                let x = windowed_frame[n] * w;
-                match signal.get_mut(sig_index) {
-                    Some(y) if n < self.q.overrap_size() => {
-                        *y = *y + x;
-                        window_overraps[sig_index] = window_overraps[sig_index] + w * w;
-                    }
-                    Some(y) => {
-                        *y = x;
-                        window_overraps[sig_index] = window_overraps[sig_index] + w * w;
-                    }
-                    _ => continue,
-                }
+
+                let w = self.window[iota];
+                let x = windowed_frame[iota] * w;
+                let is_on_overrap = iota < self.q.overrap_size();
+                *y = if is_on_overrap { *y + x } else { x };
+
+                window_overraps[sig_index as usize] = window_overraps[sig_index as usize] + w * w;
             }
 
             m += 1;
