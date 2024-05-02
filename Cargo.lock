@@ -452,6 +452,7 @@ dependencies = [
  "criterion",
  "num-complex",
  "num-traits",
+ "rayon",
  "rustfft",
 ]
 

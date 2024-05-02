@@ -1,14 +1,11 @@
 use crate::{frame::Framing, variables::Q, windows};
-use num_complex::Complex;
-use num_traits::{Float, FloatConst, Zero};
+use num_complex::{Complex, ComplexFloat};
+use num_traits::{Float, FloatConst};
 use rustfft::{Fft, FftNum, FftPlanner};
 use std::sync::Arc;
 
 pub struct Stft<T> {
     framing: Framing<T>,
-    buffer: Vec<Complex<T>>,
-    frame_scratch: Vec<T>,
-    c_scratch: Vec<Complex<T>>,
     forward: Arc<dyn Fft<T>>,
     backward: Arc<dyn Fft<T>>,
     q: Q,
@@ -23,9 +20,6 @@ where
         Stft {
             q,
             framing: Framing::with_window(q, window),
-            buffer: vec![Complex::zero(); q.window_size()],
-            frame_scratch: vec![T::zero(); q.window_size()],
-            c_scratch: vec![Complex::zero(); q.window_size()],
             forward: planner.plan_fft_forward(q.window_size()),
             backward: planner.plan_fft_inverse(q.window_size()),
         }
@@ -51,39 +45,31 @@ where
         self.q.hop_size()
     }
 
-    pub fn process<F>(&mut self, real: &mut [T], mut works_with_spec: F)
+    pub fn process<F>(&mut self, real: &mut [T], works_with_spec: F)
     where
-        F: FnMut(&mut [Complex<T>]),
+        F: Fn(&[Complex<T>]) -> Vec<Complex<T>> + Sync + Send,
     {
         let window_size = T::from(self.window_size()).unwrap();
         let fft_size = self.fft_size();
 
-        self.framing
-            .process(real, &mut self.frame_scratch, |frame| {
-                // fill self.buffer with real.
-                self.buffer.iter_mut().zip(frame.iter()).for_each(|(c, r)| {
-                    c.re = *r;
-                    c.im = T::zero();
-                });
+        self.framing.process(real, |frame| {
+            // fill self.buffer with real.
+            let mut buffer: Vec<Complex<T>> =
+                frame.iter().map(|r| Complex::new(*r, T::zero())).collect();
 
-                self.forward
-                    .process_with_scratch(&mut self.buffer, &mut self.c_scratch);
+            self.forward.process(&mut buffer);
 
-                works_with_spec(&mut self.buffer[0..fft_size]);
+            works_with_spec(&mut buffer[0..fft_size]);
 
-                // restore mirror image.
-                for n in 1..(fft_size - 1) {
-                    self.buffer[fft_size - 1 + n] = self.buffer[fft_size - 1 - n].conj();
-                }
+            // restore mirror image.
+            for n in 1..(fft_size - 1) {
+                buffer[fft_size - 1 + n] = buffer[fft_size - 1 - n].conj();
+            }
 
-                self.backward
-                    .process_with_scratch(&mut self.buffer, &mut self.c_scratch);
+            self.backward.process(&mut buffer);
 
-                frame
-                    .iter_mut()
-                    .zip(self.buffer.iter())
-                    .for_each(|(r, c)| *r = c.re / window_size);
-            });
+            buffer.into_iter().map(|c| c.re / window_size).collect()
+        });
     }
 }
 
@@ -93,11 +79,11 @@ mod tests {
 
     #[test]
     fn basic() {
-        let mut stft: Stft<f32> = Stft::with_hann(Q::new(10, 0.75));
+        let mut stft: Stft<f32> = Stft::with_hamming(Q::new(10, 0.75));
         for _ in 0..10 {
             let mut in_data = vec![10.; 4098];
             let out_data = in_data.clone();
-            stft.process(&mut in_data, |_| {});
+            stft.process(&mut in_data, |c| c.to_vec());
             assert_eq!(
                 in_data.iter().map(|x| x.round()).collect::<Vec<_>>(),
                 out_data

@@ -4,7 +4,7 @@ use stft::{Stft, Q};
 fn stft(q: Q, num_sample: usize) {
     let mut stft: Stft<f32> = Stft::with_hann(q);
     let mut samples = vec![0.; num_sample];
-    stft.process(&mut samples, |_| {});
+    stft.process(&mut samples, |c| c.to_vec());
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
