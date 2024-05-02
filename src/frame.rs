@@ -5,7 +5,6 @@ use num_traits::{Float, FloatConst};
 pub struct Framing<T> {
     window: Vec<T>,
     q: Q,
-    buffer: Vec<T>,
 }
 
 impl<T> Framing<T>
@@ -14,17 +13,15 @@ where
 {
     pub fn with_window(q: Q, window: impl Fn(T) -> T) -> Self {
         let window = windows::window(q, window);
-        Self {
-            window,
-            buffer: vec![T::zero(); q.window_size()],
-            q,
-        }
+        Self { window, q }
     }
 
-    pub fn process<F>(&mut self, signal: &mut [T], mut work_with_frame: F)
+    pub fn process<F>(&self, signal: &mut [T], scratch: &mut [T], mut work_with_frame: F)
     where
         F: FnMut(&mut [T]),
     {
+        assert!(scratch.len() == self.q.window_size());
+
         let mut window_overlaps = vec![T::zero(); signal.len()];
 
         let num_frames: usize = signal.len() / self.q.hop_size() + 1;
@@ -34,14 +31,13 @@ where
             let pos = m * self.q.hop_size();
 
             // TODO: self.buffer should be a ring buffer.
-            self.buffer.rotate_left(self.q.hop_size());
+            scratch.rotate_left(self.q.hop_size());
             for n in 0..self.q.hop_size() {
                 let pos_hop = self.q.window_size() - self.q.hop_size() + n;
-                self.buffer[pos_hop] = *signal.get(pos + n).unwrap_or(&T::zero());
+                scratch[pos_hop] = *signal.get(pos + n).unwrap_or(&T::zero());
             }
 
-            let mut windowed_frame: Vec<T> = self
-                .buffer
+            let mut windowed_frame: Vec<T> = scratch
                 .iter()
                 .zip(self.window.iter())
                 .map(|(x, w)| *x * *w)
@@ -87,10 +83,12 @@ mod tests {
     #[test]
     fn framing() {
         let q = Q::new(2, 0.5);
-        let mut framing = Framing::with_window(q, |_| 1.);
+        let framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = (0..4).map(|x| x as f32).collect();
         let mut progress: Vec<Vec<f32>> = vec![];
-        framing.process(&mut data, |v| progress.push(v.to_vec()));
+        framing.process(&mut data, &mut vec![0.; q.window_size()], |v| {
+            progress.push(v.to_vec())
+        });
 
         assert_eq!(vec![0., 0., 0., 1.], progress[0]);
         assert_eq!(vec![0., 1., 2., 3.], progress[1]);
@@ -102,10 +100,12 @@ mod tests {
     #[test]
     fn works_with_signal_too_few() {
         let q = Q::new(2, 0.5);
-        let mut framing = Framing::with_window(q, |_| 1.);
+        let framing = Framing::with_window(q, |_| 1.);
         let mut data: Vec<f32> = vec![1337.];
         let mut progress: Vec<Vec<f32>> = vec![];
-        framing.process(&mut data, |v| progress.push(v.to_vec()));
+        framing.process(&mut data, &mut vec![0.; q.window_size()], |v| {
+            progress.push(v.to_vec())
+        });
 
         assert_eq!(vec![0., 0., 1337., 0.], progress[0]);
         assert_eq!(vec![1337.], data);
@@ -113,10 +113,11 @@ mod tests {
 
     #[test]
     fn reconstruction() {
-        let mut framing = Framing::with_window(Q::new(4, 0.75), windows::hann());
+        let q = Q::new(4, 0.75);
+        let framing = Framing::with_window(q, windows::hann());
         let mut in_data: Vec<f32> = (1..64).map(|x| x as f32).collect();
         let out_data = in_data.clone();
-        framing.process(&mut in_data, |_| {});
+        framing.process(&mut in_data, &mut vec![0.; q.window_size()], |_| {});
         assert_eq!(
             out_data,
             in_data.iter().map(|x| x.round()).collect::<Vec<_>>()

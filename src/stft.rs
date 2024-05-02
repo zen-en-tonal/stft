@@ -7,7 +7,8 @@ use std::sync::Arc;
 pub struct Stft<T> {
     framing: Framing<T>,
     buffer: Vec<Complex<T>>,
-    scratch: Vec<Complex<T>>,
+    frame_scratch: Vec<T>,
+    c_scratch: Vec<Complex<T>>,
     forward: Arc<dyn Fft<T>>,
     backward: Arc<dyn Fft<T>>,
     q: Q,
@@ -23,7 +24,8 @@ where
             q,
             framing: Framing::with_window(q, window),
             buffer: vec![Complex::zero(); q.window_size()],
-            scratch: vec![Complex::zero(); q.window_size()],
+            frame_scratch: vec![T::zero(); q.window_size()],
+            c_scratch: vec![Complex::zero(); q.window_size()],
             forward: planner.plan_fft_forward(q.window_size()),
             backward: planner.plan_fft_inverse(q.window_size()),
         }
@@ -56,31 +58,32 @@ where
         let window_size = T::from(self.window_size()).unwrap();
         let fft_size = self.fft_size();
 
-        self.framing.process(real, |frame| {
-            // fill self.buffer with real.
-            self.buffer.iter_mut().zip(frame.iter()).for_each(|(c, r)| {
-                c.re = *r;
-                c.im = T::zero();
+        self.framing
+            .process(real, &mut self.frame_scratch, |frame| {
+                // fill self.buffer with real.
+                self.buffer.iter_mut().zip(frame.iter()).for_each(|(c, r)| {
+                    c.re = *r;
+                    c.im = T::zero();
+                });
+
+                self.forward
+                    .process_with_scratch(&mut self.buffer, &mut self.c_scratch);
+
+                works_with_spec(&mut self.buffer[0..fft_size]);
+
+                // restore mirror image.
+                for n in 1..(fft_size - 1) {
+                    self.buffer[fft_size - 1 + n] = self.buffer[fft_size - 1 - n].conj();
+                }
+
+                self.backward
+                    .process_with_scratch(&mut self.buffer, &mut self.c_scratch);
+
+                frame
+                    .iter_mut()
+                    .zip(self.buffer.iter())
+                    .for_each(|(r, c)| *r = c.re / window_size);
             });
-
-            self.forward
-                .process_with_scratch(&mut self.buffer, &mut self.scratch);
-
-            works_with_spec(&mut self.buffer[0..fft_size]);
-
-            // restore mirror image.
-            for n in 1..(fft_size - 1) {
-                self.buffer[fft_size - 1 + n] = self.buffer[fft_size - 1 - n].conj();
-            }
-
-            self.backward
-                .process_with_scratch(&mut self.buffer, &mut self.scratch);
-
-            frame
-                .iter_mut()
-                .zip(self.buffer.iter())
-                .for_each(|(r, c)| *r = c.re / window_size);
-        });
     }
 }
 
