@@ -25,7 +25,7 @@ where
     where
         F: FnMut(&mut [T]),
     {
-        let mut window_overraps = vec![T::zero(); signal.len()];
+        let mut window_overlaps = vec![T::zero(); signal.len()];
 
         let num_frames: usize = signal.len() / self.q.hop_size() + 1;
         let mut m: usize = 0;
@@ -50,7 +50,7 @@ where
             work_with_frame(&mut windowed_frame);
 
             for iota in 0..self.q.window_size() {
-                let sig_index = pos as i32 - self.q.overrap_size() as i32 + iota as i32;
+                let sig_index = pos as i32 - self.q.overlap_size() as i32 + iota as i32;
 
                 let has_signal = (0..signal.len() as i32).contains(&sig_index);
                 let y = if has_signal {
@@ -62,10 +62,10 @@ where
 
                 let w = self.window[iota];
                 let x = windowed_frame[iota] * w;
-                let is_on_overrap = iota < self.q.overrap_size();
-                *y = if is_on_overrap { *y + x } else { x };
+                let is_on_overlap = iota < self.q.overlap_size();
+                *y = if is_on_overlap { *y + x } else { x };
 
-                window_overraps[sig_index as usize] = window_overraps[sig_index as usize] + w * w;
+                window_overlaps[sig_index as usize] = window_overlaps[sig_index as usize] + w * w;
             }
 
             m += 1;
@@ -73,7 +73,7 @@ where
 
         signal
             .iter_mut()
-            .zip(&window_overraps)
+            .zip(&window_overlaps)
             .filter(|(_, scale)| **scale > T::zero())
             .for_each(|(y, scale)| *y = *y / *scale);
     }

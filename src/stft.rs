@@ -45,7 +45,7 @@ where
         self.window_size() / 2 + 1
     }
 
-    pub fn shift_size(&self) -> usize {
+    pub fn hop_size(&self) -> usize {
         self.q.hop_size()
     }
 

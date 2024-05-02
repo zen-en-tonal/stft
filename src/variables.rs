@@ -5,11 +5,11 @@ pub struct Q {
 }
 
 impl Q {
-    pub fn new(window_order: usize, overrap_rate: f32) -> Self {
+    pub fn new(window_order: usize, overlap_rate: f32) -> Self {
         assert!(window_order > 0);
-        assert!(0. <= overrap_rate && overrap_rate < 1.);
+        assert!(0. <= overlap_rate && overlap_rate < 1.);
         let window_size = 1 << window_order;
-        let hop_size = window_size as f32 * (1. - overrap_rate);
+        let hop_size = window_size as f32 * (1. - overlap_rate);
         Self {
             window_size,
             hop_size: hop_size.floor() as usize,
@@ -28,7 +28,7 @@ impl Q {
         self.hop_size
     }
 
-    pub fn overrap_size(&self) -> usize {
+    pub fn overlap_size(&self) -> usize {
         self.window_size() - self.hop_size()
     }
 }
